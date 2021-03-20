@@ -5,7 +5,7 @@
  * @Email        : shijiec@usc.edu
  * @Date         : 2021-03-18 22:59:15
  * @LastEditors  : Shijie Chen
- * @LastEditTime : 2021-03-19 16:53:29
+ * @LastEditTime : 2021-03-19 17:33:19
  * @Description  : 
     The Network Interface Component (NIC) to be implemented to provide a path from the processor to the underlying
     ring network is a two-register interface, which is simple yet efficient. On the sender side, packets are sent via a
@@ -106,12 +106,16 @@ module cardinal_nic #(
         if(in_buffer_status == 1'b0) begin // if input buffer is empty, tell router input channel is ready
             net_ri = 1'b1;
         end
-        else begin
+        else begin // if input buffer is full, tell router input channel is not ready
             net_ri = 1'b0;
         end
 
-        if((in_buffer_status == 1'b0) && (net_si == 1'b1)) in_buffer_we = 1'b1;
-        else in_buf_we = 1'b0;
+        if((in_buffer_status == 1'b0) && (net_si == 1'b1)) begin // if input buffer is empty and router want to write data in
+            in_buffer_we = 1'b1; // then write new data into input buffer
+        end
+        else begin // if input buffer is empty and router want to write data in
+            in_buf_we = 1'b0; // 
+        end
     end
     
     // data_out from NIC
