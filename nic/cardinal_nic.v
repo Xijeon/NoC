@@ -5,7 +5,7 @@
  * @Email        : shijiec@usc.edu
  * @Date         : 2021-03-18 22:59:15
  * @LastEditors  : Shijie Chen
- * @LastEditTime : 2021-03-19 17:33:19
+ * @LastEditTime : 2021-03-20 16:22:37
  * @Description  : 
     The Network Interface Component (NIC) to be implemented to provide a path from the processor to the underlying
     ring network is a two-register interface, which is simple yet efficient. On the sender side, packets are sent via a
@@ -88,12 +88,12 @@ module cardinal_nic #(
             out_buffer_status = 1'b0;
 
             // router
-            net_so = 1'b0;
+            //net_so = 1'b0;
             out_buffer_we = 1'b0;
             in_buffer_re = 1'b0;
 
             // processor
-            d_out = 64'h0000_0000; // If not asserted, d_out port assumes 64'h0000_0000
+            //d_out = 64'h0000_0000; // If not asserted, d_out port assumes 64'h0000_0000
         end
     end
     //----------------------------------------------------------------------------------------
@@ -101,7 +101,7 @@ module cardinal_nic #(
     //----------------------------HAND SHAKING WITH THE ROUTER--------------------------------
     // data_in from router
     always @(*) begin
-        in_buffer_di = net_di; // data input from router
+        in_buffer_di = net_di; // data input from router to NIC
 
         if(in_buffer_status == 1'b0) begin // if input buffer is empty, tell router input channel is ready
             net_ri = 1'b1;
@@ -110,31 +110,39 @@ module cardinal_nic #(
             net_ri = 1'b0;
         end
 
-        if((in_buffer_status == 1'b0) && (net_si == 1'b1)) begin // if input buffer is empty and router want to write data in
-            in_buffer_we = 1'b1; // then write new data into input buffer
+        if((in_buffer_status == 1'b0) && (net_si == 1'b1)) begin // if input buffer is empty and router ready to write data in,
+            in_buffer_we = 1'b1; // allow writing new data into input buffer
         end
-        else begin // if input buffer is empty and router want to write data in
-            in_buf_we = 1'b0; // 
+        else begin // if input buffer is full,
+            in_buffer_we = 1'b0; // prohibit writing new data into input buffer
         end
     end
     
     // data_out from NIC
     always @(*) begin
-        net_do = out_buffer_do;
-        //net_so = 1'b0;
+        net_do = out_buffer_do; // data output from NIC to router
+        net_so = 1'b0; // reset net_so to 0 after change channel polarity
 
-        if((out_buffer_status == 1'b1) && (net_ro == 1'b1))
-        begin
-            // when polarity == 1, even virtual channel is used externally
-            // only packet with vc = 0 can enter virtual channel 0, vice versa
-            if((net_polarity == 1'b1)  && (out_buffer_do[0] == 1'b0)) // note: bit 0 is VC bit
-                net_so = 1'b1;
-            if((net_polarity == 1'b0) && (out_buffer_do[0] == 1'b1))
-                net_so = 1'b1;
+        if ((out_buffer_status == 1'b1) && (net_ro == 1'b1)) begin // if out buffer is full and router is ready to read data out, check polarity
+        // For an odd polarity clk cycle:
+        // Even output virtual channel buffer is forwarded to corresponding even input virtual channel buffer of next router if conditions allow 
+        // Vice versa
+            if ((net_polarity == 1'b1) && (out_buffer_do[63] == 1'b0)) begin // if polarity is 1(odd), VC bit is 0(even)
+                net_so = 1'b1; // nic send out data
+            end
+            if ((net_polarity == 1'b0) && (out_buffer_do[63] == 1'b1)) begin // if polarity is 0(even), VC bit is 1(odd)
+                net_so = 1'b1; // nic send out data
+            end
         end
 
-        if((net_so == 1'b1) && (net_ro == 1'b1)) out_buffer_re = 1'b1;
-        else out_buffer_re = 1'b0;
+        // output buffer logic
+        if ((net_so == 1'b1) && (net_ro == 1'b1)) begin // if output buffer has data to read, and is ready to be read 
+            out_buffer_re = 1'b1; // output buffer is good to be read
+        end
+        else begin // if output buffer does not have data to read, or is not ready to be read 
+            out_buffer_re = 1'b0; // output buffer is prohibited to be read
+            // and no more data will be accepted by output buffer, when it is full(by using qualified enable signal, see buffer design)
+        end
     end
     //----------------------------------------------------------------------------------------
 
@@ -143,7 +151,7 @@ module cardinal_nic #(
         // set initial value
         //out_buffer_we = 1'b0;
         //in_buffer_re = 1'b0;
-        //d_out = 64'h0000_0000; // If not asserted, d_out port assumes 64'h0000_0000
+        d_out = 64'h0000_0000; // If not asserted, d_out port assumes 64'h0000_0000
     
         // NIC reg address logic
         out_buffer_di = d_in; // data input from processor
