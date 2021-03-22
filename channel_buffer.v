@@ -5,7 +5,7 @@
  * @Email        : shijiec@usc.edu
  * @Date         : 2021-03-18 23:26:28
  * @LastEditors  : Shijie Chen
- * @LastEditTime : 2021-03-19 12:43:45
+ * @LastEditTime : 2021-03-21 20:50:59
  * @Description  : buffer in routers and nic, one-entry synchronous fifo buffer using common clk for write and read
  */
 
@@ -32,16 +32,16 @@ module channel_buffer #(
     assign we_q = (we & (!full_empty));
 
     // clk-controled fifo logic
-    always @ (posedge clk) begin
-        if (reset = 1'b1) begin // reset logic, fifo is empty, clear fifo entry 
+    always @(posedge clk) begin
+        if (reset == 1'b1) begin // reset logic, fifo is empty, clear fifo entry 
             full_empty <= 0;
             entry <= 0;
         end
         else begin // fifo logic
-            if (re_q = 1'b1) begin // when read enable is qualified, data will be read out, after this clk cycle
+            if (re_q == 1'b1) begin // when read enable is qualified, data will be read out, after this clk cycle
                 full_empty <= 0; // fifo will be empty, after this clk cycle
             end
-            else if (we_q = 1'b1) begin // when write enable is qualified, data will be writen in
+            else if (we_q == 1'b1) begin // when write enable is qualified, data will be writen in
                 entry <= data_in; // data will be writen in fifo, after this clk cycle
                 full_empty <= 1; // fifo will be full, after this clk cycle
             end

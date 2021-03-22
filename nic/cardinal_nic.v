@@ -5,7 +5,7 @@
  * @Email        : shijiec@usc.edu
  * @Date         : 2021-03-18 22:59:15
  * @LastEditors  : Shijie Chen
- * @LastEditTime : 2021-03-20 16:22:37
+ * @LastEditTime : 2021-03-22 15:47:26
  * @Description  : 
     The Network Interface Component (NIC) to be implemented to provide a path from the processor to the underlying
     ring network is a two-register interface, which is simple yet efficient. On the sender side, packets are sent via a
@@ -21,24 +21,24 @@ module cardinal_nic #(
 )(
 //------------------------------PORTS---------------------------------------------------------
     // Processor side signals
-    input [1:0] addr, // Specify the memory address mapped registers in the NIC.
-    input [DATA_WIDTH-1:0] d_in, // Input packet from the PE to be injected into the network.
-    output reg [DATA_WIDTH-1:0] d_out, // Content of the register specified by addr[1:0].
+    input [0:1] addr, // Specify the memory address mapped registers in the NIC.
+    input [0:DATA_WIDTH-1] d_in, // Input packet from the PE to be injected into the network.
+    output reg [0:DATA_WIDTH-1] d_out, // Content of the register specified by addr[1:0].
     input nicEn, // Enable signal to the NIC. If not asserted, d_out port assumes 64'h0000_0000.
     input nicEnWr, // Write enable signal to the NIC. If asserted along with nicEn , the data on the d_in port is written into the network output channel.
 
     // Router side signals
     input net_si, // Send handshaking signal for the network input channel.
     output reg net_ri, // Ready handshaking signal for the network input channel.
-    input [DATA_WIDTH-1:0] net_di, // Packet data for the network input channel.
+    input [0:DATA_WIDTH-1] net_di, // Packet data for the network input channel.
     output reg net_so, // Send handshaking signal for the network output channel.
     input net_ro, // Ready handshaking signal for the network output channel.
-    output reg [DATA_WIDTH-1:0] net_do, // Packet data for the network output channel.
-    input net_polarity // Polarity input from the router connected to the NIC.
+    output reg [0:DATA_WIDTH-1] net_do, // Packet data for the network output channel.
+    input net_polarity, // Polarity input from the router connected to the NIC.
 
     // Control signals
     input clk, // Clock signal.
-    input reset, // Reset signal. Reset is synchronous and asserted high.
+    input reset // Reset signal. Reset is synchronous and asserted high.
 //--------------------------------------------------------------------------------------------
 );
 
@@ -46,10 +46,10 @@ module cardinal_nic #(
     // Inner control signals for buffers
     reg in_buffer_re, out_buffer_re; // read enable signal for both buffers
     reg in_buffer_we, out_buffer_we; // write enable signal for both buffers
-    reg [DATA_WIDTH-1:0] in_buffer_di, out_buffer_di; // data in for both buffers
-    wire [DATA_WIDTH-1:0] in_buffer_do, out_buffer_do; // data out for both buffers
-    reg in_buffer_status, // status register of input channel buffer
-    reg out_buffer_status; // status register of output channel buffer
+    reg [0:DATA_WIDTH-1] in_buffer_di, out_buffer_di; // data in for both buffers
+    wire [0:DATA_WIDTH-1] in_buffer_do, out_buffer_do; // data out for both buffers
+    wire in_buffer_status; // status register signal of input channel buffer
+    wire out_buffer_status; // status register signal of output channel buffer
 //--------------------------------------------------------------------------------------------
 
 //------------------------------TWO CHANNEL BUFFERS-------------------------------------------
@@ -63,7 +63,7 @@ module cardinal_nic #(
             .data_in    (in_buffer_di       ), 
             .data_out   (in_buffer_do       ), 
             .full       (in_buffer_status   ), // the full signal register of input channel buffer
-            .empty      ()// do not care input buffer is empty or not
+            .empty      ()
     );
 
     // output channel buffer
@@ -75,8 +75,8 @@ module cardinal_nic #(
             .we         (out_buffer_we      ), 
             .data_in    (out_buffer_di      ), 
             .data_out   (out_buffer_do      ), 
-            .full       (), // do not care output buffer is full or not
-            .empty      (out_buffer_status  ) // the empty signal register of output channel buffer
+            .full       (out_buffer_status  ), // the full signal register of output channel buffer
+            .empty      ()
     );
 //--------------------------------------------------------------------------------------------
 
@@ -84,8 +84,8 @@ module cardinal_nic #(
     //---------------------------------------RESET--------------------------------------------
     always @(posedge clk) begin
         if (reset == 1'b0) begin
-            in_buffer_status = 1'b0;
-            out_buffer_status = 1'b0;
+            //in_buffer_status = 1'b0;
+            //out_buffer_status = 1'b0;
 
             // router
             //net_so = 1'b0;
@@ -93,7 +93,7 @@ module cardinal_nic #(
             in_buffer_re = 1'b0;
 
             // processor
-            //d_out = 64'h0000_0000; // If not asserted, d_out port assumes 64'h0000_0000
+            //d_out = 64'h0; // If not asserted, d_out port assumes 64'h0
         end
     end
     //----------------------------------------------------------------------------------------
@@ -120,18 +120,20 @@ module cardinal_nic #(
     
     // data_out from NIC
     always @(*) begin
-        net_do = out_buffer_do; // data output from NIC to router
+        net_do = 64'h0; // data output from NIC to router
         net_so = 1'b0; // reset net_so to 0 after change channel polarity
 
         if ((out_buffer_status == 1'b1) && (net_ro == 1'b1)) begin // if out buffer is full and router is ready to read data out, check polarity
         // For an odd polarity clk cycle:
         // Even output virtual channel buffer is forwarded to corresponding even input virtual channel buffer of next router if conditions allow 
         // Vice versa
-            if ((net_polarity == 1'b1) && (out_buffer_do[63] == 1'b0)) begin // if polarity is 1(odd), VC bit is 0(even)
+            if ((net_polarity == 1'b1) && (out_buffer_do[0] == 1'b0)) begin // if polarity is 1(odd), VC bit is 0(even)
                 net_so = 1'b1; // nic send out data
+                net_do = out_buffer_do;
             end
-            if ((net_polarity == 1'b0) && (out_buffer_do[63] == 1'b1)) begin // if polarity is 0(even), VC bit is 1(odd)
+            if ((net_polarity == 1'b0) && (out_buffer_do[0] == 1'b1)) begin // if polarity is 0(even), VC bit is 1(odd)
                 net_so = 1'b1; // nic send out data
+                net_do = out_buffer_do;
             end
         end
 
@@ -151,7 +153,7 @@ module cardinal_nic #(
         // set initial value
         //out_buffer_we = 1'b0;
         //in_buffer_re = 1'b0;
-        d_out = 64'h0000_0000; // If not asserted, d_out port assumes 64'h0000_0000
+        d_out = 64'h0; // If not asserted, d_out port assumes 64'h0
     
         // NIC reg address logic
         out_buffer_di = d_in; // data input from processor
@@ -164,7 +166,7 @@ module cardinal_nic #(
             end
             else begin // nicEn == 1, nicEnWr == 0
                 case(addr)
-                    2'b00 : begin // addr == 00, read out data in input buffer at next clk
+                    2'b00 : begin // addr == 00, processor read out data in input buffer at next clk
                         in_buffer_re = 1'b1;
                         d_out = in_buffer_do;
                     end
@@ -180,4 +182,4 @@ module cardinal_nic #(
     end
     //----------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------
-    
+endmodule
