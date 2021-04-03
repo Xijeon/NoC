@@ -5,7 +5,7 @@
  * @Email        : shijiec@usc.edu
  * @Date         : 2021-03-25 11:17:56
  * @LastEditors  : Shijie Chen
- * @LastEditTime : 2021-03-31 22:00:52
+ * @LastEditTime : 2021-04-02 17:46:56
  * @Description  : 
                 A variable-width 4-stage pipelined processor that executes all the 
                 instructions in the Cardinal Processor Instruction Set Manual. (Since Load/Store instructions 
@@ -36,11 +36,11 @@ module cardinal_cpu (
     output  [0:63]  dmem_dataOut, // data output to dmem            (.dataIn        )
 
     // nic                                                          (cardinal_nic   )
-    input   [0:63]  din_nic, // data from PE to the nic             (.d_in          )
+    output  [0:63]  din_nic, // data from PE to NIC                 (.d_in          )
     input   [0:1]   addr_nic, // address of registers in the nic    (.addr          )
     output          nicEn, // nic enable                            (.nicEn         )
     output          nicWrEn, // nic write enable                    (.nicWrEn       )
-    output  [0:63]  dout_nic // data from nic to PE                 (.d_out         ) 
+    input   [0:63]  dout_nic // data from NIC to PE                 (.d_out         ) 
 //--------------------------------------------------------------------------------------------  
 
 );
@@ -86,34 +86,84 @@ module cardinal_cpu (
 //--------------------------------------SIGNALS-----------------------------------------------
     // IF stage signals
         reg     [0:31]  pc; // program counter
-        reg     [0:31]  IF_ID; // IF/ID stage register
+        // IF/ID stage register
+        reg     [0:31]  IF_ID; 
 
     // ID stage signals
-        // control signals
-        wire            stall; // active high; declared as wire, as we intend to produce it using a continuous assign statement
-        wire            branch_success; // active high; if branch success assert this signal for flush logic
-        reg     [0:31]  branch_target; // branch target address
-        // Register file signals
-        reg             ID_rf_wr_en; // write enable of Register File
-        reg     [0:4]   ID_rf_rd_addr_0, ID_rf_rd_addr_1; // address for read port 0 and 1 of Register File
-        wire    [0:63]  ID_rf_data_out_0, ID_rf_data_out_1; // data output of read port 0 and 1 of Register File 
-        // decode inst.
+        // stage inputs
         wire    [0:5]   ID_opcode; // 6-bit opcode of Inst.
         wire    [0:4]   ID_rD, ID_rA, ID_rB; // addresses of destination reg D and source reges A, B
         wire    [0:1]   ID_ww; // 2-bit word width
         wire    [0:5]   ID_alu_opcode; // 6-bit alu opcode
         wire    [0:15]  ID_imm_addr; // 16-bit immediate address for M-type Inst.
-        // external signals
+        // FU signals
+        reg             ID_fu_rA, ID_fu_rB;
+        // control signals
+        wire            stall; // active high; stall signal for every stages
+        wire            ID_mem_stall; // For VSD or VLD stall pipeline for 1 clk
+        wire            ID_alu_stall5; // For VDIV, VSQRT stall pipeline for 5 clks
+        wire            ID_alu_stall4; // For VMULEU, VMULOU, VMOD, VSQEU, VSQOU stall pipeline for 4 clks
+        wire            ID_alu_stall3; // For ADD, SUB, SRL, SLL, SRA stall pipeline for 3 clks
+        wire            branch_success; // active high; if branch success assert this signal for flush logic
+        reg     [0:15]  branch_target; // branch target address
+        // Register file signals
+        reg             ID_rf_wr_en; // write enable of Register File
+        reg     [0:4]   ID_rf_rd_addr_0, ID_rf_rd_addr_1; // address for read port 0 and 1 of Register File
+        wire    [0:63]  ID_rf_data_out_0, ID_rf_data_out_1; // data output of read port 0 and 1 of Register File 
+        // memory signals
         reg             ID_dmemEn, ID_dmemWrEn; // dmem enable signal, dmem write enable signal 
         reg             ID_nicEn, ID_nicWrEn; // nic enable signal, nic write enable signal
+        // forwarding muxes
+        reg     [0:63]  ID_data_out_0_mux, ID_data_out_1_mux; 
+        // shadow register of dmem
+        reg     [0:97]  shadow_reg; // dmemEn + dmemWrEn + {16'b0, imm_addr_id} + ID_data_out_0_mux
+        // ID/EXMEM stage register
+        reg     [0:154] ID_EXMEM;
 
     // EXMEM stage signals
+        // stage inputs
+        wire    [0:4]   EXMEM_rD, EXMEM_rA, EXMEM_rB;
+        wire    [0:1]   EXMEM_alu_ww;
+        wire    [0:5]   EXMEM_alu_opcode;
+        wire    [0:15]  EXMEM_imm_addr;
+        wire            EXMEM_dmemEn, EXMEM_dmemWrEn; 
+        wire            EXMEM_nicEn, EXMEM_nicWrEn;
+        wire    [0:1]   EXMEM_addr_nic
+        wire    [0:63]  EXMEM_dout_nic
+        wire            EXMEM_rf_wr_en;
+            //wire            stall;
+        
+        // stall signals
+        wire            EXMEM_mem_stall; 
+        reg             EXMEM_mem_stall_count; // 1-bit counter
+        reg             EXMEM_mem_stall_reg; // stall signal for memory accessment
+        wire            EXMEM_alu_stall5; 
+        reg     [0:2]   EXMEM_alu_stall5_count; // 3-bit counter
+        reg             EXMEM_alu_stall5_reg; // stall signal for 5-clk alu operation
+        wire            EXMEM_alu_stall4;
+        reg     [0:1]   EXMEM_alu_stall4_count; // 2-bit counter
+        reg             EXMEM_alu_stall4_reg; // stall signal for 4-clk alu operation
+        wire            EXMEM_alu_stall3;
+        reg     [0:1]   EXMEM_alu_stall3_count; // 2-bit counter
+        reg             EXMEM_alu_stall3_reg; // stall signal for 3-clk alu operation
+        
+        // alu signals
+        wire    [0:63]  EXMEM_alu_source_A, EXMEM_alu_source_B, EXMEM_alu_result;
+        //wire    [0:5]   EXMEM_alu_opcode;   
+        //wire    [0:1]   EXMEM_alu_ww;
+        reg     [0:63]  EXMEM_alu_result_reg;
+
+        // MemToReg MUX
+        reg     [0:63]  EXMEM_data_in_mux; // decide data from alu result, dmem, nic, which will be written into RF
+
+        // EXMEM/WB stage register
 
     // WB stage signals
-    wire            WB_rf_wrEn; // write enbale of Register File
-    wire    [0:2]   WB_rf_wrWw; // write data word width of Register File
-    reg     [0:4]   WB_rf_wr_addr; // address for write port of Register File
-    wire    [0:63]  WB_rf_data_in; // data input of Register File
+        wire    [0:63]  WB_rf_data_in; // data input of Register File
+        wire            WB_rf_wr_en; // write enbale of Register File
+        //wire    [0:2]   WB_rf_ww; // write data word width of Register File
+        reg     [0:4]   WB_rf_wr_addr; // address for write port of Register File
+        
 
 //--------------------------------------------------------------------------------------------
 
@@ -138,11 +188,11 @@ module cardinal_cpu (
     // ALU INSTANTIATION
     alu alu
     (
-        .data_in_A  (EXMEM_alu_data_in_A), // alu data A
-        .data_in_B  (EXMEM_alu_data_in_B), // alu data B
+        .source_A   (EXMEM_alu_source_A ), // alu source data A
+        .source_B   (EXMEM_alu_source_B ), // alu source data B
         .opcode     (EXMEM_alu_opcode   ), // 6-bit alu opcode
-        .wrWw       (EXMEM_alu_wrWw     ), // word width
-        .data_out   (EXMEM_alu_data_out )  // alu data output
+        .ww         (EXMEM_alu_ww       ), // word width
+        .result     (EXMEM_alu_result   )  // alu result output
     );
 
 //--------------------------------------------------------------------------------------------
@@ -158,7 +208,7 @@ module cardinal_cpu (
             pc <= pc;
         end
         else if (branch_success == 1'b1) begin // branch success, jump to target
-            pc <= branch_target;
+            pc <= {16'b0, branch_target}; // branch_target is 16-bit wide
         else begin
             pc <= pc + 4; // normal cases, pc += 4
         end
@@ -194,40 +244,81 @@ module cardinal_cpu (
     assign ID_alu_opcode = IF_ID[26:31];
     assign ID_imm_addr = IF_ID[16:31];
 
-    // stall logic
-    // If there is a SD or a LD (rD is not $0), we have the intent to stall in next stage
-    // this signal is used to control the stall flag register
-    wire intent_to_stall_id;
-    assign intent_to_stall_id = ((opcode_id == M_TYPE_SD) || ((opcode_id == M_TYPE_LD) && (rD_id != 0)));
+    // Generates register file read addresses
+    always @(*) begin
+        ID_rf_rd_addr_0 = 0;
+        ID_rf_rd_addr_1 = 0;
+        if (ID_opcode == R_TYPE_VALU) begin // 2 operators inst.
+            ID_rf_rd_addr_0 = ID_rA;
+            ID_rf_rd_addr_1 = ID_rB;
+        end
+        if ((ID_opcode == M_TYPE_VSD) || (ID_opcode == R_TYPE_VBEZ) || (ID_opcode == R_TYPE_VBNEZ)) begin // M_TYPE_VLD do not read RF
+            ID_rf_rd_addr_0 = ID_rD;
+        end
+    end
 
-    // Intention for 5-clock ALU stall
-    // For DIV, SQRT,
-    wire intent_to_alu_stall5_id;
-    assign intent_to_alu_stall5_id = ( (opcode_id == R_TYPE_ALU) && ((func_code_id == VDIV) || (func_code_id == VSQRT))  && (rD_id != 0) ) ? 1'b1 : 1'b0;
+    // mem stall logic
+    // For VSD or VLD stall pipeline for 1 clk
+    assign ID_mem_stall = ( (ID_opcode == M_TYPE_VSD) 
+        || (ID_opcode == M_TYPE_VLD) 
+            && (ID_rD != 5'b0) ) ? 1'b1 : 1'b0;
 
-    // Intention for 4-clock ALU stall
-    // For MULT, SQ, MOD, 
-    wire intent_to_alu_stall4_id;
-    assign intent_to_alu_stall4_id = ( (opcode_id == R_TYPE_ALU) 
-        && ((func_code_id == VMULEU) || (func_code_id == VMULOU) || (func_code_id == VMOD) || (func_code_id == VSQEU) || (func_code_id == VSQOU))  
-            && (rD_id != 0) ) ? 1'b1 : 1'b0;
+    // alu stall logic
+    // For VDIV, VSQRT stall pipeline for 5 clks
+    assign ID_alu_stall5 = ( (ID_opcode == R_TYPE_ALU) 
+        && ((ID_alu_opcode == VDIV) || (ID_alu_opcode == VSQRT))  
+            && (ID_rD != 5'b0) ) ? 1'b1 : 1'b0;
 
-    // Intention for 3-clock ALU stall
-    // For ADD, SUB, SRL, SLL, SRA 
-    wire intent_to_alu_stall3_id;
-    assign intent_to_alu_stall3_id = ( (opcode_id == R_TYPE_ALU) 
-        && ((func_code_id == VADD) || (func_code_id == VSUB) || (func_code_id == VSLL) || (func_code_id == VSRL) || (func_code_id == VSRA))  
-            && (rD_id != 0) ) ? 1'b1 : 1'b0;
+    // For VMULEU, VMULOU, VMOD, VSQEU, VSQOU stall pipeline for 4 clks
+    assign ID_alu_stall4 = ( (ID_opcode == R_TYPE_ALU) 
+        && ((ID_alu_opcode == VMULEU) || (ID_alu_opcode == VMULOU) || (ID_alu_opcode == VMOD) || (ID_alu_opcode == VSQEU) || (ID_alu_opcode == VSQOU))  
+            && (ID_rD != 5'b0) ) ? 1'b1 : 1'b0;
 
-    // Generates register file read address of port 0 and port 1
-    always @(*)
-    begin
-        RF_rd_addr_1 = rB_id;
+    // For ADD, SUB, SRL, SLL, SRA stall pipeline for 3 clks
+    assign ID_alu_stall3 = ( (ID_opcode == R_TYPE_ALU) 
+        && ((ID_alu_opcode == VADD) || (ID_alu_opcode == VSUB) || (ID_alu_opcode == VSLL) || (ID_alu_opcode == VSRL) || (ID_alu_opcode == VSRA))  
+            && (ID_rD != 5'b0) ) ? 1'b1 : 1'b0;
+   
+    // Forwarding Unit
+    // By comparing the addresses of senior rD and junior rA or rB in ID stage,
+    // generates FU signals to forwarding data
+    always @(*) begin
+        ID_fu_rA = 1'b0;
+        ID_fu_rB = 1'b0;
+        if ((EXMEM_rf_wr_en == 1'b1) && (EXMEM_rD != 5'b0)) begin // if cpu will write RF and senior rD is not $0
+            if (EXMEM_rD == ID_rf_rd_addr_0) begin
+                ID_fu_rA = 1'b1;
+            end
+            if (EXMEM_rD == ID_rf_rd_addr_1) begin
+                ID_fu_rB = 1'b1;
+            end
+        end
+    end
+    
+    // Forwarding logic from EXMEM to ID stage
+    // only for R-type inst after finishing alu ops
+    always @(*) begin
+        ID_data_out_0_mux = ID_rf_data_out_0;
+        ID_data_out_1_mux = ID_rf_data_out_1;
+        if (ID_fu_rA == 1) begin
+            ID_data_out_0_mux = EXMEM_alu_result_reg;
+        end
+        if (ID_fu_rB == 1) begin
+            ID_data_out_1_mux = EXMEM_alu_result_reg;
+        end
+    end
+
+    // Branch logic 
+    always @(*) begin
+        // initial values
+        branch_success = 1'b0;
+        branch_target = ID_imm_addr;
+
+        if ((ID_opcode == R_TYPE_BEZ) && (ID_rD == 5'b0))
+            branch_success = 1'b1;
         
-        if((opcode_id == M_TYPE_SD) || (opcode_id == R_TYPE_BEZ) || (opcode_id == R_TYPE_BNEZ))
-            RF_rd_addr_0 = rD_id;
-        else
-            RF_rd_addr_0 = rA_id;
+        if ((ID_opcode == R_TYPE_BNEZ) && (ID_rD != 5'b0))
+            branch_success = 1'b1;
     end
 
     // Generates dmem and nic control signals 
@@ -246,7 +337,7 @@ module cardinal_cpu (
             end
             M_TYPE_VLD : begin // loads need to write RF, and read nic or dmem 
                 ID_rf_wr_en = 1;
-                if (ID_imm_addr == 2'b01) begin // read nic input channel status
+                if (ID_imm_addr[14:15] == 2'b01) begin // read nic input channel status
                     ID_nicEn = 1; 
                 end
                 else begin // read dmem
@@ -254,7 +345,7 @@ module cardinal_cpu (
                 end
             end
             M_TYPE_VSD : begin // stores need to write nic or dmem
-                if (ID_imm_addr == 2'b11) begin // read nic output channel status
+                if (ID_imm_addr[14:15] == 2'b11) begin // read nic output channel status
                     ID_nicEn = 1;
                     //ID_nicWrEn = 1;
                 end
@@ -266,19 +357,206 @@ module cardinal_cpu (
         endcase
     end
 
+    // shadow register of dmem, when stall happens, dmem could read data from shadow register
+    always @(posedge clk) begin
+        if (reset == 1'b0) begin
+            shadow_reg <= 0;
+        end
+        else begin 
+            if(stall == 1'b1) begin
+                shadow_reg <= shadow_reg;
+            end
+            else
+            begin
+                shadow_reg[0] <= ID_dmemEn;
+                shadow_reg[1] <= ID_dmemWrEn;
+                shadow_reg[2:33] <= {16'b0, ID_imm_addr};
+                shadow_reg[34:97] <= ID_data_out_0_mux;
+            end
+        end
+    end
+
+    assign memEn = (stall == 1'b1) ? shadow_reg[0] : ID_dmemEn;
+    assign memWrEn = (stall == 1'b1) ? shadow_reg[1] : ID_dmemWrEn;
+    assign addr_out = (stall == 1'b1) ? shadow_reg[2:33] : {16'b0, ID_imm_addr};
+    assign dmem_dataOut = (stall == 1'b1) ? shadow_reg[34:97] : ID_data_out_0_mux;
 
     
+    // Write stage reg ID/EXMEM
 
+    always @(posedge clk) begin
+        if (reset == 1'b1) begin // reset
+            ID_EXMEM <= 0;
+        end
+        else begin
+            if (stall == 1'b1) begin // stall
+                ID_EXMEM <= ID_EXMEM;
+            end 
+            else begin 
+                ID_EXMEM[0:63] <= ID_data_out_0_mux;
+                ID_EXMEM[64:127] <= ID_data_out_1_mux;
+                ID_EXMEM[128:132] <= ID_rD;
+                //ID_EXMEM[133:135] <= ppp_id;
+                ID_EXMEM[136:137] <= ID_ww;
+                ID_EXMEM[138:143] <= ID_alu_opcode;
+                ID_EXMEM[144:145] <= ID_imm_addr[14:15];
+                ID_EXMEM[146:150] <= {ID_dmemEn, ID_dmemWrEn, ID_nicEn, ID_nicWrEn, ID_rf_wr_en};
+                ID_EXMEM[151] <= ID_mem_stall;
+                ID_EXMEM[152] <= ID_alu_stall5;
+                ID_EXMEM[153] <= ID_alu_stall4;
+                ID_EXMEM[154] <= ID_alu_stall3;
+            end
+        end
+    end 
 //--------------------------------------------------------------------------------------------
 
-
-
-
-
-
-
 //----------------------------------------EXMEM-----------------------------------------------
+// Read stage reg ID/EXMEM
+    assign EXMEM_dout_nic = ID_EXMEM[0:63]; 
+    assign {EXMEM_alu_data_in_A, EXMEM_alu_data_in_B} = ID_EXMEM[0:127];
+    assign EXMEM_rD = ID_EXMEM[128:132];
+    // assign ppp_exm = ID_EXMEM[133:135];
+    assign EXMEM_alu_ww = ID_EXMEM[136:137];
+    assign EXMEM_alu_opcode = ID_EXMEM[138:143];
+    assign EXMEM_addr_nic = ID_EXMEM[144:145]; 
+    assign {EXMEM_dmemEn, EXMEM_dmemWrEn, EXMEM_nicEn, EXMEM_nicWrEn, EXMEM_rf_wr_en} = ID_EXMEM[146:150];
+    assign EXMEM_mem_stall = ID_EXMEM[151];
+    assign EXMEM_alu_stall5 = ID_EXMEM[152];
+    assign EXMEM_alu_stall4 = ID_EXMEM[153];
+    assign EXMEM_alu_stall3 = ID_EXMEM[154];
+
+// Generates nic signal 
+    assign nicEn = EXMEM_nicEn;
+    assign nicWrEn = EXMEM_nicWrEn;
+
+// Generates 1-clk memory stall signal
+    // couter logic
+    always @(posedge clk) begin
+        if (reset == 1'b1) begin // init counter
+            EXMEM_mem_stall_count <= 0;
+        end
+        else if (EXMEM_mem_stall == 1'b1) begin // flip counter after use
+            EXMEM_mem_stall_count <= ~EXMEM_mem_stall_count;
+        end
+    end
+    // If LD or SD in EX_MEM stage, and counter is 0, generate stall signal for 1 clk
+    always @(*) begin
+        EXMEM_mem_stall_reg = 1'b0; // init mem stall signal reg
+        if ((EXMEM_mem_stall == 1'b1) && (EXMEM_mem_stall_count == 1'b0)) begin
+            EXMEM_mem_stall_reg = 1'b1;
+        end
+    end
+
+// Generates 5-clk alu stall signal
+    // couter logic
+    always @(posedge clk) begin
+        if (reset == 1'b1) begin // init counter
+            EXMEM_alu_stall5_count <= 0;
+        end
+        else if (EXMEM_alu_stall5 == 1'b1) begin 
+            if (EXMEM_alu_stall5_count == 3'b100) begin // reset counter after 4
+                EXMEM_alu_stall5_count <= 3'b000;
+            end
+            else begin
+                EXMEM_alu_stall5_count <= EXMEM_alu_stall5_count + 1'b1; // increment counter
+            end
+        end
+    end
+    // If counter is 0,1,2,3, generate stall signal for 1 more clk
+    always @(*) begin
+        EXMEM_alu_stall5_reg = 1'b0; // init alu stall5 signal reg
+        if ((EXMEM_alu_stall5_count == 3'b000) || (EXMEM_alu_stall5_count == 3'b001) || (EXMEM_alu_stall5_count == 3'b010) || (EXMEM_alu_stall5_count == 3'b011)) begin
+            EXMEM_alu_stall5_reg = 1'b1;
+        end
+    end
+
+// Generates 4-clk alu stall signal
+    // couter logic
+    always @(posedge clk) begin
+        if (reset == 1'b1) begin // init counter
+            EXMEM_alu_stall4_count <= 0;
+        end
+        else if (EXMEM_alu_stall4 == 1'b1) begin 
+            if (EXMEM_alu_stall4_count == 2'b11) begin // reset counter after 3
+                EXMEM_alu_stall4_count <= 2'b00;
+            end
+            else begin
+                EXMEM_alu_stall4_count <= EXMEM_alu_stall4_count + 1'b1; // increment counter
+            end
+        end
+    end
+    // If counter is 0,1,2, generate stall signal for 1 more clk
+    always @(*) begin
+        EXMEM_alu_stall4_reg = 1'b0; // init alu stall4 signal reg
+        if ((EXMEM_alu_stall4_count == 2'b00) || (EXMEM_alu_stall4_count == 2'b01) || (EXMEM_alu_stall4_count == 2'b10)) begin
+            EXMEM_alu_stall4_reg = 1'b1;
+        end
+    end
+
+// Generates 3-clk alu stall signal
+    // couter logic
+    always @(posedge clk) begin
+        if (reset == 1'b1) begin // init counter
+            EXMEM_alu_stall3_count <= 0;
+        end
+        else if (EXMEM_alu_stall3 == 1'b1) begin 
+            if (EXMEM_alu_stall3_count == 2'b10) begin // reset counter after 2
+                EXMEM_alu_stall3_count <= 2'b00;
+            end
+            else begin
+                EXMEM_alu_stall3_count <= EXMEM_alu_stall3_count + 1'b1; // increment counter
+            end
+        end
+    end
+    // If counter is 0,1, generate stall signal for 1 more clk
+    always @(*) begin
+        EXMEM_mem_stall_reg = 1'b0; // init mem stall signal reg
+        if ((EXMEM_alu_stall3_count == 2'b00) || (EXMEM_alu_stall3_count == 2'b01)) begin
+            EXMEM_alu_stall3_reg = 1'b1;
+        end
+    end
+
+    assign stall = (EXMEM_mem_stall_reg || EXMEM_alu_stall5_reg || EXMEM_alu_stall4_reg || EXMEM_alu_stall2_reg) ? 1'b1 : 1'b0;
+
+// Mem to Reg MUX logic  
+    // data from alu result, dmem, nic
+    always @(*)
+    begin
+        EXMEM_data_in_mux = EXMEM_alu_result; // data from alu 
+        if (EXMEM_dmemEn == 1'b1) begin
+            EXMEM_data_in_mux = d_in[0:63]; // data from dmem
+        end
+        else if (EXMEM_nicEn == 1'b1) begin
+            EXMEM_data_in_mux = dout_nic[0:63]; // data from nic
+        end
+    end
+
+// Write stage reg EXMEM/WB
+    reg [0:72] EXMEM_WB;
+    always @(posedge clk) begin
+        if(reset == 1'b1) begin // system reset
+            EXMEM_WB <= 0;
+        end
+        else if(stall == 1'b1) begin
+            EXMEM_WB[64] <= 0; // pipeline stall, insert bubble to WB
+        end
+        else begin
+            EXMEM_WB[0:63] <= EXMEM_data_in_mux[0:63];
+            EXMEM_WB[64] <= EXMEM_rf_wr_en;
+            //EXMEM_WB[65:67] <= ppp_exm;
+            EXMEM_WB[68:72] <= EXMEM_rD;
+        end
+    end
+
 //--------------------------------------------------------------------------------------------
 
 //------------------------------------------WB------------------------------------------------
+// Read stage reg EXMEM/WB
+    assign WB_rf_data_in = EXMEM_WB[0:63];
+    assign WB_rf_wr_en = EXMEM_WB[64];
+    //assign ppp_wb = EXMEM_WB[65:67];
+    assign WB_rf_wr_addr = EXMEM_WB[68:72];
+    
 //--------------------------------------------------------------------------------------------
+
+endmodule

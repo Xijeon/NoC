@@ -1,8 +1,8 @@
 /*
  * @Author: Yihao Wang
  * @Date: 2020-03-12 02:04:23
- * @LastEditTime: 2020-04-20 18:37:44
- * @LastEditors: Please set LastEditors
+ * @LastEditTime : 2021-04-01 14:46:08
+ * @LastEditors  : Shijie Chen
  * @Description: Cardinal Processor with 32-bit address, 32-bit instruction and 64-bit data
  * @FilePath: /EE577b_final_project/project_p2/design/processor_top.v
  */
@@ -167,11 +167,11 @@
             M_TYPE_LD : 
             begin
                 RF_WrEn_id = 1;
-                if(imm_addr_id[0:1] == 2'b11) nic_En_id = 1;
+                if(imm_addr_id[14:15] == 2'b11) nic_En_id = 1;
                 else dmem_En_id = 1;
             end
             M_TYPE_SD :
-                if(imm_addr_id[0:1] == 2'b11)
+                if(imm_addr_id[14:15] == 2'b11)
                 begin
                     nic_En_id = 1;
                     nic_WrEn_id = 1;
